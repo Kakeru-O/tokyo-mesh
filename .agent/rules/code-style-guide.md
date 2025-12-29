@@ -112,3 +112,8 @@ def fetch_data(url: str) -> dict:
 * **Linter:** `flake8` または `Ruff` (コードの不備をチェック)
 * **Formatter:** `black` または `Ruff` (コードを自動整形)
 * **Type Checker:** `mypy` (静的型チェック)
+
+
+## Streamlit Coding Rules
+- **HTML/CSS Rendering**: Do NOT use `st.markdown(..., unsafe_allow_html=True)`. This is a security risk.
+- **Alternative**: Use `st.html(...)` for any raw HTML or CSS injection.

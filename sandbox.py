@@ -13,7 +13,7 @@ def _():
 
 @app.cell
 def _(pd):
-    df = pd.read_csv("./data/tblT001227E13.txt", encoding="shift-jis")
+    df = pd.read_csv("./data/raw/tblT001227E13.txt", encoding="shift-jis")
     df
     return (df,)
 
@@ -28,6 +28,18 @@ def _(df):
 def _(pd):
     df2 = pd.read_csv("./data/processed/tblT001227E13.csv")
     df2
+    return (df2,)
+
+
+@app.cell
+def _(df2):
+    df2.describe()
+    return
+
+
+@app.cell
+def _(df2):
+    df2[df2["KEY_CODE"]==53394422132]
     return
 
 
