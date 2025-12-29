@@ -25,6 +25,13 @@ def _(df):
 
 
 @app.cell
+def _(pd):
+    df2 = pd.read_csv("./data/processed/tblT001227E13.csv")
+    df2
+    return
+
+
+@app.cell
 def _():
     return
 
