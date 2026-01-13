@@ -11,6 +11,21 @@ import plotly.graph_objects as go
 # プロジェクトルートからのインポートを可能にする
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from utils.mesh_utils import meshcode_to_latlon
+from utils.adk_service import run_agent_chat, init_session
+import uuid
+import asyncio
+import nest_asyncio
+from dotenv import load_dotenv
+
+# .envファイルから環境変数を読み込む
+load_dotenv()
+
+# Streamlitのイベントループと競合しないようにパッチを適用
+nest_asyncio.apply()
+import nest_asyncio
+
+# Streamlitのイベントループと競合しないようにパッチを適用
+nest_asyncio.apply()
 
 # --- Constants ---
 DEFAULT_LAT = 35.6813489
@@ -82,6 +97,29 @@ def apply_custom_css():
             margin-top: 5px;
             color: #8b949e;
             font-size: 0.8rem;
+        }
+        /* AI Chat Styles */
+        .chat-container {
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 15px;
+            background-color: rgba(22, 27, 34, 0.5);
+            margin-top: 20px;
+        }
+        .ai-bubble {
+            background-color: #1f242dbd;
+            padding: 12px;
+            border-radius: 8px;
+            border-left: 4px solid #58a6ff;
+            margin: 10px 0;
+        }
+        .user-bubble {
+            background-color: #2386362b;
+            padding: 12px;
+            border-radius: 8px;
+            border-right: 4px solid #238636;
+            text-align: right;
+            margin: 10px 0;
         }
     </style>
     """)
@@ -431,6 +469,69 @@ def main():
             <p style="color: #8b949e; font-size: 1.1rem;">東京都の地域メッシュ統計を可視化し、都市構造の深層を分析する。</p>
         </div>
     """)
+    
+    # --- AI Assistant Section ---
+    with st.sidebar:
+        st.divider()
+        st.subheader("🤖 AI Assistant")
+        st.caption("エリアの分析や統計データの質問に答えます。")
+
+        # API Key Input
+        api_key = st.text_input("Google AI API Key", type="password", help="Geminiを利用するためのAPIキーを入力してください。")
+        
+        # Model Selection
+        model_name = st.selectbox(
+            "モデル選択",
+            [
+                "gemini-2.5-flash",     # 2026 New
+                "gemini-2.5-flash-lite",# 2026 New (High limit)
+                "gemini-3-flash",       # 2026 New (Preview, strict limit)
+                #"gemini-3-pro",         # 2026 New (Preview, strict limit)
+            ],
+            index=0, 
+            help="使用するAIモデルを選択してください。'gemini-2.5-flash-lite' が制限緩めでおすすめです。"
+        )
+        
+        if "adk_session_id" not in st.session_state:
+            st.session_state.adk_session_id = str(uuid.uuid4())
+            # 新規セッションの場合は初期化を実行
+            try:
+                asyncio.run(init_session(st.session_state.adk_session_id))
+            except Exception as e:
+                st.error(f"セッション初期化エラー: {e}")
+        
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+
+        # チャット履歴のクリアボタン
+        if st.button("🗑️ 履歴をクリア", use_container_width=True):
+            st.session_state.messages = []
+            st.rerun()
+
+    # チャット入力
+    if prompt := st.chat_input("渋谷駅周辺の30代の人口は？"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        
+        # AIの回答を取得
+        with st.spinner("AIが分析中..."):
+            try:
+                if not api_key:
+                    st.error("APIキーを入力してください。")
+                else:
+                    # 非同期関数を同期的に実行
+                    response = asyncio.run(run_agent_chat(prompt, st.session_state.adk_session_id, api_key, model_name))
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+            except Exception as e:
+                st.error(f"AIエラー: {str(e)}")
+
+    # チャット履歴をメイン画面のどこかに表示するか、サイドバーをトグルにするか。
+    # ここではサイドバー内に表示してみる（またはメインの最下部）
+    with st.sidebar:
+        for msg in reversed(st.session_state.messages[-10:]): # 直近10件を表示
+            if msg["role"] == "user":
+                st.html(f'<div class="user-bubble">{msg["content"]}</div>')
+            else:
+                st.html(f'<div class="ai-bubble">{msg["content"]}</div>')
     
     # 操作パネルからの入力取得
     mesh_level, gender_label, gender_suffix, selected_ages, display_type, age_groups = render_sidebar()
