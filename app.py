@@ -98,29 +98,7 @@ def apply_custom_css():
             color: #8b949e;
             font-size: 0.8rem;
         }
-        /* AI Chat Styles */
-        .chat-container {
-            border: 1px solid #30363d;
-            border-radius: 12px;
-            padding: 15px;
-            background-color: rgba(22, 27, 34, 0.5);
-            margin-top: 20px;
-        }
-        .ai-bubble {
-            background-color: #1f242dbd;
-            padding: 12px;
-            border-radius: 8px;
-            border-left: 4px solid #58a6ff;
-            margin: 10px 0;
-        }
-        .user-bubble {
-            background-color: #2386362b;
-            padding: 12px;
-            border-radius: 8px;
-            border-right: 4px solid #238636;
-            text-align: right;
-            margin: 10px 0;
-        }
+
     </style>
     """)
 
@@ -267,7 +245,7 @@ def render_sidebar():
             help="割合: 各メッシュ内での構成比を表示"
         )
         
-        submitted = st.form_submit_button("✨ 設定を適用", use_container_width=True)
+        submitted = st.form_submit_button("✨ 設定を適用", width="stretch")
         
     return mesh_level, selected_gender, gender_options[selected_gender], selected_ages, display_type, age_groups
 
@@ -456,7 +434,7 @@ def render_age_gender_chart(df: pd.DataFrame, age_groups: List[str]):
         )
         
         with chart_col2:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
 
 def main():
@@ -470,12 +448,14 @@ def main():
         </div>
     """)
     
-    # --- AI Assistant Section ---
+    # 1. サイドバー設定 & データ表示設定 (これらを先に実行)
+    # 操作パネルからの入力取得
+    mesh_level, gender_label, gender_suffix, selected_ages, display_type, age_groups = render_sidebar()
+
+    # --- AI設定 (サイドバーに追加) ---
     with st.sidebar:
         st.divider()
-        st.subheader("🤖 AI Assistant")
-        st.caption("エリアの分析や統計データの質問に答えます。")
-
+        st.subheader("🤖 AI設定")
         # API Key Input
         api_key = st.text_input("Google AI API Key", type="password", help="Geminiを利用するためのAPIキーを入力してください。")
         
@@ -483,18 +463,17 @@ def main():
         model_name = st.selectbox(
             "モデル選択",
             [
-                "gemini-2.5-flash",     # 2026 New
-                "gemini-2.5-flash-lite",# 2026 New (High limit)
-                "gemini-3-flash",       # 2026 New (Preview, strict limit)
-                #"gemini-3-pro",         # 2026 New (Preview, strict limit)
+                "gemini-2.5-flash",
+                "gemini-2.5-flash-lite",
+                "gemini-3-flash",
             ],
             index=0, 
-            help="使用するAIモデルを選択してください。'gemini-2.5-flash-lite' が制限緩めでおすすめです。"
+            help="使用するAIモデルを選択してください。"
         )
-        
+
+        # セッション管理
         if "adk_session_id" not in st.session_state:
             st.session_state.adk_session_id = str(uuid.uuid4())
-            # 新規セッションの場合は初期化を実行
             try:
                 asyncio.run(init_session(st.session_state.adk_session_id))
             except Exception as e:
@@ -503,125 +482,126 @@ def main():
         if "messages" not in st.session_state:
             st.session_state.messages = []
 
-        # チャット履歴のクリアボタン
-        if st.button("🗑️ 履歴をクリア", use_container_width=True):
+        # チャット履歴クリア
+        if st.button("🗑️ 会話履歴をクリア", width="stretch"):
             st.session_state.messages = []
             st.rerun()
+
+    # 2. データのロードと集計・可視化 (AIより先に実行して表示をブロックしない)
+    df = get_aggregated_data(mesh_level)
+    
+    # データがある場合のみ描画
+    if df is not None:
+        # 1. 秘匿データ対応の分母再計算
+        age_cols_to_sum = [f"{age}歳人口　{gender_suffix}" for age in age_groups]
+        if gender_suffix == "総数":
+             age_cols_to_sum = [f"{age}歳人口　総数" for age in age_groups]
+        
+        df["calculated_total"] = df[age_cols_to_sum].sum(axis=1)
+
+        # 2. 表示値（分子）の決定
+        if selected_ages:
+            target_cols = [f"{age}歳人口　{gender_suffix}" for age in selected_ages]
+            if gender_suffix == "総数":
+                 target_cols = [f"{age}歳人口　総数" for age in selected_ages]
+            
+            display_name = f"{gender_label}: {', '.join(selected_ages)}"
+            df["raw_value"] = df[target_cols].sum(axis=1)
+        else:
+            display_name = f"{gender_label}: 全年代"
+            df["raw_value"] = df["calculated_total"]
+
+        # 表示モードに応じた値の計算 (実数 or 割合)
+        if display_type == "割合 (%)":
+            df["display_value"] = (df["raw_value"] / df["calculated_total"].replace(0, np.nan) * 100).fillna(0)
+            df["formatted_value"] = df["display_value"].map(lambda x: f"{x:.2f}%")
+            unit_label = "%"
+        else:
+            df["display_value"] = df["raw_value"]
+            df["formatted_value"] = df["display_value"].map(lambda x: f"{x:,.0f} 人")
+            unit_label = "人"
+            
+        # メトリクス表示
+        render_metrics(df, "raw_value", gender_label)
+
+        # 性年代別チャートの表示
+        st.divider()
+        render_age_gender_chart(df, age_groups)
+
+        # 地図セクション
+        st.divider()
+        st.markdown(f"### 🗺️ {display_name} の分布 ({display_type})")
+        
+        max_val = df["display_value"].max()
+        df["fill_color"] = df["display_value"].apply(lambda v: get_heatmap_color(v, max_val))
+
+        df["formatted_age"] = df["平均年齢"].map(lambda x: f"{x:.2f}")
+
+        map_data = df[[
+            "polygon", "fill_color", "display_value", "formatted_value", "formatted_age", "KEY_CODE", "lat_center", "lon_center"
+        ]]
+
+        # 地図レイヤーの設定
+        layer = pdk.Layer(
+            "PolygonLayer",
+            data=map_data,
+            get_polygon="polygon",
+            get_fill_color="fill_color",
+            get_line_color=[255, 255, 255, 0],
+            pickable=True,
+            auto_highlight=True,
+        )
+
+        view_state = pdk.ViewState(
+            latitude=df["lat_center"].mean() if not df.empty else DEFAULT_LAT,
+            longitude=df["lon_center"].mean() if not df.empty else DEFAULT_LON,
+            zoom=9,
+            pitch=0,
+        )
+
+        st.pydeck_chart(pdk.Deck(
+            layers=[layer],
+            initial_view_state=view_state,
+            tooltip={
+                "html": "メッシュコード: {KEY_CODE}<br/>"
+                        f"<b>{display_name}:</b> {{formatted_value}}<br/>"
+                        "平均年齢: {formatted_age} 歳",
+                "style": {"backgroundColor": "#161b22", "color": "white", "border": "1px solid #30363d"}
+            },
+            map_style=None
+        ))
+        render_map_legend(unit_label)
+
+    # 3. AI Assistant (メインエリア下部に配置)
+    st.divider()
+    st.subheader("🤖 AI Assistant")
+    st.caption("地図に表示されているエリアについて質問したり、分析を依頼できます。")
+
+    # チャット履歴の表示
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"]) # Markdownとしてレンダリングされる
 
     # チャット入力
     if prompt := st.chat_input("渋谷駅周辺の30代の人口は？"):
         st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.write(prompt)
         
-        # AIの回答を取得
-        with st.spinner("AIが分析中..."):
-            try:
-                if not api_key:
-                    st.error("APIキーを入力してください。")
-                else:
-                    # 非同期関数を同期的に実行
-                    response = asyncio.run(run_agent_chat(prompt, st.session_state.adk_session_id, api_key, model_name))
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-            except Exception as e:
-                st.error(f"AIエラー: {str(e)}")
-
-    # チャット履歴をメイン画面のどこかに表示するか、サイドバーをトグルにするか。
-    # ここではサイドバー内に表示してみる（またはメインの最下部）
-    with st.sidebar:
-        for msg in reversed(st.session_state.messages[-10:]): # 直近10件を表示
-            if msg["role"] == "user":
-                st.html(f'<div class="user-bubble">{msg["content"]}</div>')
+        # AI応答の取得と表示
+        with st.chat_message("assistant"):
+            if not api_key:
+                st.error("左側のサイドバーでAPIキーを設定してください。")
             else:
-                st.html(f'<div class="ai-bubble">{msg["content"]}</div>')
-    
-    # 操作パネルからの入力取得
-    mesh_level, gender_label, gender_suffix, selected_ages, display_type, age_groups = render_sidebar()
-    
-    # データのロードと集計
-    df = get_aggregated_data(mesh_level)
-    if df is None:
-        return
+                with st.spinner("AIが分析中..."):
+                    try:
+                        # 非同期関数を同期的に実行
+                        response = asyncio.run(run_agent_chat(prompt, st.session_state.adk_session_id, api_key, model_name))
+                        st.write(response) # ストリーミング風に表示したい場合は別途実装が必要だが、まずはwriteで一括表示
+                        st.session_state.messages.append({"role": "assistant", "content": response})
+                    except Exception as e:
+                        st.error(f"AIエラー: {str(e)}")
 
-    # 1. 秘匿データ対応の分母再計算
-    age_cols_to_sum = [f"{age}歳人口　{gender_suffix}" for age in age_groups]
-    if gender_suffix == "総数":
-         age_cols_to_sum = [f"{age}歳人口　総数" for age in age_groups]
-    
-    df["calculated_total"] = df[age_cols_to_sum].sum(axis=1)
-
-    # 2. 表示値（分子）の決定
-    if selected_ages:
-        target_cols = [f"{age}歳人口　{gender_suffix}" for age in selected_ages]
-        if gender_suffix == "総数":
-             target_cols = [f"{age}歳人口　総数" for age in selected_ages]
-        
-        display_name = f"{gender_label}: {', '.join(selected_ages)}"
-        df["raw_value"] = df[target_cols].sum(axis=1)
-    else:
-        display_name = f"{gender_label}: 全年代"
-        df["raw_value"] = df["calculated_total"]
-
-    # 表示モードに応じた値の計算 (実数 or 割合)
-    if display_type == "割合 (%)":
-        df["display_value"] = (df["raw_value"] / df["calculated_total"].replace(0, np.nan) * 100).fillna(0)
-        df["formatted_value"] = df["display_value"].map(lambda x: f"{x:.2f}%")
-        unit_label = "%"
-    else:
-        df["display_value"] = df["raw_value"]
-        df["formatted_value"] = df["display_value"].map(lambda x: f"{x:,.0f} 人")
-        unit_label = "人"
-        
-    # メトリクス表示
-    render_metrics(df, "raw_value", gender_label)
-
-    # 性年代別チャートの表示
-    st.divider()
-    render_age_gender_chart(df, age_groups)
-
-    # 地図セクション
-    st.divider()
-    st.markdown(f"### 🗺️ {display_name} の分布 ({display_type})")
-    
-    max_val = df["display_value"].max()
-    df["fill_color"] = df["display_value"].apply(lambda v: get_heatmap_color(v, max_val))
-
-    df["formatted_age"] = df["平均年齢"].map(lambda x: f"{x:.2f}")
-
-    map_data = df[[
-        "polygon", "fill_color", "display_value", "formatted_value", "formatted_age", "KEY_CODE", "lat_center", "lon_center"
-    ]]
-
-    # 地図レイヤーの設定
-    layer = pdk.Layer(
-        "PolygonLayer",
-        data=map_data,
-        get_polygon="polygon",
-        get_fill_color="fill_color",
-        get_line_color=[255, 255, 255, 0],
-        pickable=True,
-        auto_highlight=True,
-    )
-
-    view_state = pdk.ViewState(
-        latitude=df["lat_center"].mean() if not df.empty else DEFAULT_LAT,
-        longitude=df["lon_center"].mean() if not df.empty else DEFAULT_LON,
-        zoom=9,
-        pitch=0,
-    )
-
-    st.pydeck_chart(pdk.Deck(
-        layers=[layer],
-        initial_view_state=view_state,
-        tooltip={
-            "html": "メッシュコード: {KEY_CODE}<br/>"
-                    f"<b>{display_name}:</b> {{formatted_value}}<br/>"
-                    "平均年齢: {formatted_age} 歳",
-            "style": {"backgroundColor": "#161b22", "color": "white", "border": "1px solid #30363d"}
-        },
-        map_style=None
-    ))
-    render_map_legend(unit_label)
-
-    
 
 if __name__ == "__main__":
     main()
