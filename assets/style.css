@@ -1,0 +1,71 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Outfit:wght@500;700&display=swap');
+
+.stApp {
+    background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 100%);
+}
+
+.stSidebar {
+    background-color: rgba(255, 255, 255, 0.7) !important;
+    backdrop-filter: blur(10px);
+    border-right: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+h1, h2, h3 {
+    color: #1a202c;
+    font-family: 'Outfit', sans-serif;
+    font-weight: 700;
+}
+
+.stMetric {
+    background-color: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(8px);
+    padding: 20px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.02);
+    transition: transform 0.2s ease-in-out;
+}
+
+.stMetric:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.08);
+}
+
+.metric-label {
+    color: #4a5568;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.metric-value {
+    color: #2d3748;
+    font-size: 1.8rem;
+    font-weight: 700;
+}
+
+/* Color Legend Styles */
+.legend-container {
+    padding: 15px;
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(4px);
+    border-radius: 12px;
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    margin-top: 10px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+}
+
+.legend-bar {
+    height: 10px;
+    width: 100%;
+    background: linear-gradient(to right, #2563eb, #2dd4bf, #4ade80, #facc15, #ef4444);
+    border-radius: 5px;
+}
+
+.legend-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+    color: #718096;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
