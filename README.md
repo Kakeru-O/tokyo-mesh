@@ -11,7 +11,7 @@ Tokyo Mesh Insight AI は、東京都の地域メッシュ統計（人口、属�
 **[地域メッシュ計算ロジック詳解：緯度経度⇔コード相互変換をPythonで実装してみた](https://nttdocomo-developers.jp/entry/2025/12/18/090000_6)**
 
 ## 🌐 アプリURL
-[ここにアプリのURLを追記してください]
+https://tokyo-mesh-mvxxrq6ehuzmappibezzjqe.streamlit.app/
 
 ## ✨ 主な機能
 - **インタラクティブ・メッシュマップ**:
