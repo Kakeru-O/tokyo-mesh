@@ -12,7 +12,7 @@ from google.genai import types as genai_types
 
 import math
 import re
-from utils.mesh_utils import latlon_to_meshcode
+from utils.mesh_utils import latlon_to_meshcode, meshcode_to_latlon
 from utils.data_processor import load_base_data, aggregate_mesh_data
 
 def safe_float(value):
@@ -33,6 +33,67 @@ def get_cached_dataframe():
     return load_base_data(csv_path)
 
 # --- Tools Definition ---
+
+import re
+
+def parse_search_input(query: str) -> Dict[str, Any]:
+    """
+    検索入力を解析し、座標またはメッシュコードを特定します。
+    
+    対応フォーマット:
+    1. 緯度経度: "35.68, 139.76" (カンマ区切り)
+    2. メッシュコード: "53394526" (4-11桁の数字)
+    3. 住所・施設名: "新宿駅" (その他)
+    """
+    query = query.strip()
+    
+    # 1. 緯度経度のチェック (数値, 数値)
+    lat_lon_match = re.match(r"^(\d+\.?\d*)\s*,\s*(\d+\.?\d*)$", query)
+    if lat_lon_match:
+        try:
+            lat = float(lat_lon_match.group(1))
+            lon = float(lat_lon_match.group(2))
+            # 日本付近の妥当性チェック（広めに）
+            if 20 <= lat <= 50 and 120 <= lon <= 155:
+                return {
+                    "type": "latlon",
+                    "lat": lat,
+                    "lon": lon,
+                    "status": "success",
+                    "display": f"{lat:.4f}, {lon:.4f}"
+                }
+        except ValueError:
+            pass
+
+    # 2. メッシュコードのチェック (4-11桁の数値のみ)
+    if re.match(r"^\d{4,11}$", query):
+        try:
+            # メッシュコードから中心座標を取得
+            coords = meshcode_to_latlon(query, mode="center")
+            return {
+                "type": "meshcode",
+                "mesh_code": query,
+                "lat": coords["lat"],
+                "lon": coords["lon"],
+                "status": "success",
+                "display": f"Mesh Code: {query}"
+            }
+        except Exception:
+            pass
+
+    # 3. 住所検索
+    geo_res = geocode_address(query)
+    if geo_res.get("status") == "success":
+        return {
+            "type": "address",
+            "lat": geo_res["lat"],
+            "lon": geo_res["lon"],
+            "address": geo_res["address"],
+            "status": "success",
+            "display": geo_res["address"]
+        }
+    
+    return {"status": "error", "message": "場所を特定できませんでした。"}
 
 def geocode_address(address: str) -> Dict[str, Any]:
     """

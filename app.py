@@ -10,8 +10,8 @@ import plotly.graph_objects as go
 
 # プロジェクトルートからのインポートを可能にする
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from utils.mesh_utils import meshcode_to_latlon
-from utils.adk_service import run_agent_chat, init_session
+from utils.mesh_utils import meshcode_to_latlon, latlon_to_meshcode
+from utils.adk_service import run_agent_chat, init_session, parse_search_input
 import uuid
 import asyncio
 import nest_asyncio
@@ -215,6 +215,40 @@ def render_sidebar():
     """サイドバーのUI描画と入力取得"""
     st.sidebar.title("🎮 操作パネル")
     
+    # --- 場所検索セクション ---
+    st.sidebar.divider()
+    st.sidebar.subheader("🔍 エリア検索")
+    search_query = st.sidebar.text_input(
+        "場所・座標・メッシュコード",
+        placeholder="例: 新宿駅, 35.68, 139.76",
+        help="住所、緯度経度、またはメッシュコードを入力してください。"
+    )
+    
+    if st.sidebar.button("📍 検索・移動", width="stretch"):
+        if search_query:
+            with st.spinner("検索中..."):
+                res = parse_search_input(search_query)
+                if res["status"] == "success":
+                    st.session_state.map_center = {"lat": res["lat"], "lon": res["lon"]}
+                    # ズームレベルを上げる (より詳細が見えるように)
+                    st.session_state.map_zoom = 15
+                    st.session_state.search_result = res
+                    st.toast(f"移動しました: {res['display']}")
+                else:
+                    st.sidebar.error(res["message"])
+                    
+    if "search_result" in st.session_state:
+        res = st.session_state.search_result
+        # 選択中の地点の6次メッシュを表示（理解を促すため）
+        current_mesh = latlon_to_meshcode(res["lat"], res["lon"], level=6)
+        st.sidebar.info(f"""
+        **現在の検索地点:**
+        - {res['display']}
+        - 座標: `{res['lat']:.5f}, {res['lon']:.5f}`
+        - 6次メッシュ: `{current_mesh}`
+        """)
+
+    # --- メッシュ設定セクション ---
     with st.sidebar.form("filter_form"):
         st.subheader("🌐 メッシュ設定")
         mesh_level = st.slider(
@@ -246,7 +280,7 @@ def render_sidebar():
         )
         
         submitted = st.form_submit_button("✨ 設定を適用", width="stretch")
-        
+     
     return mesh_level, selected_gender, gender_options[selected_gender], selected_ages, display_type, age_groups
 
 
@@ -452,6 +486,12 @@ def main():
     # 操作パネルからの入力取得
     mesh_level, gender_label, gender_suffix, selected_ages, display_type, age_groups = render_sidebar()
 
+    # 地図の初期位置管理
+    if "map_center" not in st.session_state:
+        st.session_state.map_center = {"lat": DEFAULT_LAT, "lon": DEFAULT_LON}
+    if "map_zoom" not in st.session_state:
+        st.session_state.map_zoom = 9
+
     # --- AI設定 (サイドバーに追加) ---
     with st.sidebar:
         st.divider()
@@ -553,9 +593,9 @@ def main():
         )
 
         view_state = pdk.ViewState(
-            latitude=df["lat_center"].mean() if not df.empty else DEFAULT_LAT,
-            longitude=df["lon_center"].mean() if not df.empty else DEFAULT_LON,
-            zoom=9,
+            latitude=st.session_state.map_center["lat"],
+            longitude=st.session_state.map_center["lon"],
+            zoom=st.session_state.map_zoom,
             pitch=0,
         )
 
