@@ -10,7 +10,22 @@ import plotly.graph_objects as go
 
 # プロジェクトルートからのインポートを可能にする
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from utils.mesh_utils import meshcode_to_latlon
+from utils.mesh_utils import meshcode_to_latlon, latlon_to_meshcode
+from utils.adk_service import run_agent_chat, init_session, parse_search_input
+import uuid
+import asyncio
+import nest_asyncio
+from dotenv import load_dotenv
+
+# .envファイルから環境変数を読み込む
+load_dotenv()
+
+# Streamlitのイベントループと競合しないようにパッチを適用
+nest_asyncio.apply()
+import nest_asyncio
+
+# Streamlitのイベントループと競合しないようにパッチを適用
+nest_asyncio.apply()
 
 # --- Constants ---
 DEFAULT_LAT = 35.6813489
@@ -28,63 +43,12 @@ st.set_page_config(
 
 
 def apply_custom_css():
-    """カスタムCSSを適用してデザインを洗練させる"""
-    st.html("""
-    <style>
-        .main {
-            background-color: #0e1117;
-        }
-        .stApp {
-            background: linear-gradient(135deg, #0e1117 0%, #161b22 100%);
-        }
-        .stSidebar {
-            background-color: rgba(22, 27, 34, 0.8);
-            border-right: 1px solid #30363d;
-        }
-        h1, h2, h3 {
-            color: #58a6ff;
-            font-family: 'Outfit', 'Inter', sans-serif;
-            font-weight: 700;
-        }
-        .stMetric {
-            background-color: #161b22;
-            padding: 20px;
-            border-radius: 12px;
-            border: 1px solid #30363d;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        .metric-label {
-            color: #8b949e;
-            font-size: 0.9rem;
-        }
-        .metric-value {
-            color: #ffffff;
-            font-size: 1.8rem;
-            font-weight: 600;
-        }
-        /* Color Legend Styles */
-        .legend-container {
-            padding: 10px;
-            background: rgba(22, 27, 34, 0.6);
-            border-radius: 8px;
-            border: 1px solid #30363d;
-            margin-top: 10px;
-        }
-        .legend-bar {
-            height: 12px;
-            width: 100%;
-            background: linear-gradient(to right, #0000ff, #00ffff, #00ff00, #ffff00, #ff0000);
-            border-radius: 6px;
-        }
-        .legend-labels {
-            display: flex;
-            justify-content: space-between;
-            margin-top: 5px;
-            color: #8b949e;
-            font-size: 0.8rem;
-        }
-    </style>
-    """)
+    """外部CSSファイルを読み込んで適用する"""
+    css_path = os.path.join(os.path.dirname(__file__), "assets", "style.css")
+    if os.path.exists(css_path):
+        with open(css_path, "r") as f:
+            css = f.read()
+            st.html(f"<style>{css}</style>")
 
 
 @st.cache_data
@@ -186,19 +150,53 @@ def get_heatmap_color(val: float, max_val: float) -> List[int]:
     
     normalized = val / max_val
     if normalized < 0.25:
-        return [0, int(255 * (normalized / 0.25)), 255, 140]
+        return [37, 99, 235, 140]  # #2563eb
     elif normalized < 0.5:
-        return [0, 255, int(255 * (1 - (normalized - 0.25) / 0.25)), 140]
+        return [45, 212, 191, 140]  # #2dd4bf
     elif normalized < 0.75:
-        return [int(255 * ((normalized - 0.5) / 0.25)), 255, 0, 140]
+        return [250, 204, 21, 140]  # #facc15
     else:
-        return [255, int(255 * (1 - (normalized - 0.75) / 0.25)), 0, 160]
+        return [239, 68, 68, 160]  # #ef4444
 
 
 def render_sidebar():
     """サイドバーのUI描画と入力取得"""
     st.sidebar.title("🎮 操作パネル")
     
+    # --- 場所検索セクション ---
+    st.sidebar.divider()
+    st.sidebar.subheader("🔍 エリア検索")
+    search_query = st.sidebar.text_input(
+        "場所・座標・メッシュコード",
+        placeholder="例: 新宿駅, 35.68, 139.76",
+        help="住所、緯度経度、またはメッシュコードを入力してください。"
+    )
+    
+    if st.sidebar.button("📍 検索・移動", width="stretch"):
+        if search_query:
+            with st.spinner("検索中..."):
+                res = parse_search_input(search_query)
+                if res["status"] == "success":
+                    st.session_state.map_center = {"lat": res["lat"], "lon": res["lon"]}
+                    # ズームレベルを上げる (より詳細が見えるように)
+                    st.session_state.map_zoom = 14
+                    st.session_state.search_result = res
+                    st.toast(f"移動しました: {res['display']}")
+                else:
+                    st.sidebar.error(res["message"])
+                    
+    if "search_result" in st.session_state:
+        res = st.session_state.search_result
+        # 選択中の地点の6次メッシュを表示（理解を促すため）
+        current_mesh = latlon_to_meshcode(res["lat"], res["lon"], level=6)
+        st.sidebar.info(f"""
+        **現在の検索地点:**
+        - {res['display']}
+        - 座標: `{res['lat']:.5f}, {res['lon']:.5f}`
+        - 6次メッシュ: `{current_mesh}`
+        """)
+
+    # --- メッシュ設定セクション ---
     with st.sidebar.form("filter_form"):
         st.subheader("🌐 メッシュ設定")
         mesh_level = st.slider(
@@ -229,8 +227,8 @@ def render_sidebar():
             help="割合: 各メッシュ内での構成比を表示"
         )
         
-        submitted = st.form_submit_button("✨ 設定を適用", use_container_width=True)
-        
+        submitted = st.form_submit_button("✨ 設定を適用", width="stretch")
+     
     return mesh_level, selected_gender, gender_options[selected_gender], selected_ages, display_type, age_groups
 
 
@@ -255,7 +253,7 @@ def render_metrics(df: pd.DataFrame, raw_val_col: str, gender_label: str):
         <div class="stMetric">
             <div class="metric-label">🏠 エリア全人口 ({gender_label})</div>
             <div class="metric-value">{base_total:,.0f} <span style="font-size:1rem; font-weight:normal;">人</span></div>
-            <div style="color: #8b949e; font-size: 0.8rem; margin-top: 4px;">選択した性別の全年代合計</div>
+            <div style="color: #718096; font-size: 0.8rem; margin-top: 4px;">選択した性別の全年代合計</div>
         </div>
         """)
 
@@ -264,7 +262,7 @@ def render_metrics(df: pd.DataFrame, raw_val_col: str, gender_label: str):
         <div class="stMetric">
             <div class="metric-label">🗺️ 描画メッシュ数</div>
             <div class="metric-value">{len(df):,} <span style="font-size:1rem; font-weight:normal;">件</span></div>
-            <div style="color: #8b949e; font-size: 0.8rem; margin-top: 4px;">現在の解像度での区画数</div>
+            <div style="color: #718096; font-size: 0.8rem; margin-top: 4px;">現在の解像度での区画数</div>
         </div>
         """)
         
@@ -281,7 +279,7 @@ def render_metrics(df: pd.DataFrame, raw_val_col: str, gender_label: str):
         <div class="stMetric">
             <div class="metric-label">🎂 平均年齢</div>
             <div class="metric-value">{avg_age:.2f} <span style="font-size:1rem; font-weight:normal;">歳</span></div>
-            <div style="color: #8b949e; font-size: 0.8rem; margin-top: 4px;">エリア全体の人口構成に基づく</div>
+            <div style="color: #718096; font-size: 0.8rem; margin-top: 4px;">エリア全体の人口構成に基づく</div>
         </div>
         """)
 
@@ -290,8 +288,8 @@ def render_map_legend(unit: str):
     """地図の凡例を表示"""
     st.html(f"""
     <div class="legend-container">
-        <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-            <span style="color:#58a6ff; font-weight:bold;">Heatmap Legend ({unit})</span>
+        <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+            <span style="color:#2d3748; font-weight:700; font-size:0.85rem;">Heatmap Legend ({unit})</span>
         </div>
         <div class="legend-bar"></div>
         <div class="legend-labels">
@@ -329,15 +327,15 @@ def render_age_gender_chart(df: pd.DataFrame, age_groups: List[str]):
                 m_ratio = male_total / total_pop * 100
                 f_ratio = female_total / total_pop * 100
                 st.html(f"""
-                <div style="margin-top: 20px;">
-                    <div style="font-size: 0.8rem; color: #8b949e;">性別比率</div>
-                    <div style="display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 5px 0;">
-                        <div style="width: {m_ratio}%; background-color: #58a6ff;"></div>
-                        <div style="width: {f_ratio}%; background-color: #ff7f0e;"></div>
+                <div style="margin-top: 20px; padding: 15px; background: rgba(255,255,255,0.4); border-radius: 12px; border: 1px solid rgba(0,0,0,0.05);">
+                    <div style="font-size: 0.8rem; color: #4a5568; font-weight: 600;">性別比率</div>
+                    <div style="display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 8px 0;">
+                        <div style="width: {m_ratio}%; background-color: #3b82f6;"></div>
+                        <div style="width: {f_ratio}%; background-color: #f97316;"></div>
                     </div>
                     <div style="display: flex; justify-content: space-between; font-size: 0.75rem;">
-                        <span style="color: #58a6ff;">男: {m_ratio:.1f}%</span>
-                        <span style="color: #ff7f0e;">女: {f_ratio:.1f}%</span>
+                        <span style="color: #3b82f6; font-weight: 600;">男: {m_ratio:.1f}%</span>
+                        <span style="color: #f97316; font-weight: 600;">女: {f_ratio:.1f}%</span>
                     </div>
                 </div>
                 """)
@@ -379,7 +377,7 @@ def render_age_gender_chart(df: pd.DataFrame, age_groups: List[str]):
             x=female_plot,
             name="女",
             orientation='h',
-            marker=dict(color='#ff7f0e', line=dict(color='rgba(255, 255, 255, 0.2)', width=1)),
+            marker=dict(color='#f97316', line=dict(color='rgba(255, 255, 255, 0.4)', width=1)),
             hovertemplate='%{y} (女): %{x:,.1f}' + hover_suffix
         ))
         
@@ -398,11 +396,11 @@ def render_age_gender_chart(df: pd.DataFrame, age_groups: List[str]):
                           "0", 
                           f"{max_val/2:,.1f}" if chart_mode == "割合 (%)" else f"{max_val/2:,.0f}", 
                           f"{max_val:,.1f}" if chart_mode == "割合 (%)" else f"{max_val:,.0f}"],
-                gridcolor="#30363d",
-                zerolinecolor="#8b949e",
+                gridcolor="#e2e8f0",
+                zerolinecolor="#94a3b8",
             ),
             yaxis=dict(
-                gridcolor="#30363d",
+                gridcolor="#e2e8f0",
             ),
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
@@ -411,14 +409,15 @@ def render_age_gender_chart(df: pd.DataFrame, age_groups: List[str]):
                 yanchor="bottom",
                 y=1.02,
                 xanchor="right",
-                x=1
+                x=1,
+                font=dict(color="#4a5568")
             ),
-            font=dict(color="#8b949e"),
-            hoverlabel=dict(bgcolor="#161b22", font_size=13, font_family="Inter")
+            font=dict(color="#4a5568", family="Inter"),
+            hoverlabel=dict(bgcolor="white", font_size=13, font_family="Inter", bordercolor="#e2e8f0")
         )
         
         with chart_col2:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
 
 def main():
@@ -427,100 +426,171 @@ def main():
     # メインヘッダー
     st.html("""
         <div style="text-align: left; padding-bottom: 20px;">
-            <h1 style="font-size: 2.5rem; margin-bottom: 0;">🗼 Tokyo Mesh Insight AI</h1>
-            <p style="color: #8b949e; font-size: 1.1rem;">東京都の地域メッシュ統計を可視化し、都市構造の深層を分析する。</p>
+            <h1 style="font-size: 2.5rem; margin-bottom: 0; background: linear-gradient(90deg, #1a202c 0%, #4a5568 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">🗼 Tokyo Mesh Insight AI</h1>
+            <p style="color: #4a5568; font-size: 1.1rem; font-weight: 500;">東京都の地域メッシュ統計を可視化し、都市構造の深層を分析する。</p>
         </div>
     """)
     
+    # 1. サイドバー設定 & データ表示設定 (これらを先に実行)
     # 操作パネルからの入力取得
     mesh_level, gender_label, gender_suffix, selected_ages, display_type, age_groups = render_sidebar()
-    
-    # データのロードと集計
+
+    # 地図の初期位置管理
+    if "map_center" not in st.session_state:
+        st.session_state.map_center = {"lat": DEFAULT_LAT, "lon": DEFAULT_LON}
+    if "map_zoom" not in st.session_state:
+        st.session_state.map_zoom = 9
+
+    # --- AI設定 (サイドバーに追加) ---
+    with st.sidebar:
+        st.divider()
+        st.subheader("🤖 AI設定")
+        # API Key Input
+        api_key = st.text_input("Google AI API Key", type="password", help="Geminiを利用するためのAPIキーを入力してください。")
+        
+        # Model Selection
+        model_name = st.selectbox(
+            "モデル選択",
+            [
+                "gemini-2.5-flash",
+                "gemini-2.5-flash-lite",
+                "gemini-3-flash",
+            ],
+            index=0, 
+            help="使用するAIモデルを選択してください。"
+        )
+
+        # セッション管理
+        if "adk_session_id" not in st.session_state:
+            st.session_state.adk_session_id = str(uuid.uuid4())
+            try:
+                asyncio.run(init_session(st.session_state.adk_session_id))
+            except Exception as e:
+                st.error(f"セッション初期化エラー: {e}")
+        
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+
+        # チャット履歴クリア
+        if st.button("🗑️ 会話履歴をクリア", width="stretch"):
+            st.session_state.messages = []
+            st.rerun()
+
+    # 2. データのロードと集計・可視化 (AIより先に実行して表示をブロックしない)
     df = get_aggregated_data(mesh_level)
-    if df is None:
-        return
-
-    # 1. 秘匿データ対応の分母再計算
-    age_cols_to_sum = [f"{age}歳人口　{gender_suffix}" for age in age_groups]
-    if gender_suffix == "総数":
-         age_cols_to_sum = [f"{age}歳人口　総数" for age in age_groups]
     
-    df["calculated_total"] = df[age_cols_to_sum].sum(axis=1)
-
-    # 2. 表示値（分子）の決定
-    if selected_ages:
-        target_cols = [f"{age}歳人口　{gender_suffix}" for age in selected_ages]
+    # データがある場合のみ描画
+    if df is not None:
+        # 1. 秘匿データ対応の分母再計算
+        age_cols_to_sum = [f"{age}歳人口　{gender_suffix}" for age in age_groups]
         if gender_suffix == "総数":
-             target_cols = [f"{age}歳人口　総数" for age in selected_ages]
+             age_cols_to_sum = [f"{age}歳人口　総数" for age in age_groups]
         
-        display_name = f"{gender_label}: {', '.join(selected_ages)}"
-        df["raw_value"] = df[target_cols].sum(axis=1)
-    else:
-        display_name = f"{gender_label}: 全年代"
-        df["raw_value"] = df["calculated_total"]
+        df["calculated_total"] = df[age_cols_to_sum].sum(axis=1)
 
-    # 表示モードに応じた値の計算 (実数 or 割合)
-    if display_type == "割合 (%)":
-        df["display_value"] = (df["raw_value"] / df["calculated_total"].replace(0, np.nan) * 100).fillna(0)
-        df["formatted_value"] = df["display_value"].map(lambda x: f"{x:.2f}%")
-        unit_label = "%"
-    else:
-        df["display_value"] = df["raw_value"]
-        df["formatted_value"] = df["display_value"].map(lambda x: f"{x:,.0f} 人")
-        unit_label = "人"
+        # 2. 表示値（分子）の決定
+        if selected_ages:
+            target_cols = [f"{age}歳人口　{gender_suffix}" for age in selected_ages]
+            if gender_suffix == "総数":
+                 target_cols = [f"{age}歳人口　総数" for age in selected_ages]
+            
+            # display_name = f"{gender_label}: {', '.join(selected_ages)}"
+            df["raw_value"] = df[target_cols].sum(axis=1)
+        else:
+            # display_name = f"{gender_label}: 全年代"
+            df["raw_value"] = df["calculated_total"]
+
+        # 表示モードに応じた値の計算 (実数 or 割合)
+        if display_type == "割合 (%)":
+            df["display_value"] = (df["raw_value"] / df["calculated_total"].replace(0, np.nan) * 100).fillna(0)
+            df["formatted_value"] = df["display_value"].map(lambda x: f"{x:.2f}%")
+            unit_label = "%"
+        else:
+            df["display_value"] = df["raw_value"]
+            df["formatted_value"] = df["display_value"].map(lambda x: f"{x:,.0f} 人")
+            unit_label = "人"
+            
+        # メトリクス表示
+        render_metrics(df, "raw_value", gender_label)
+
+        # 性年代別チャートの表示
+        st.divider()
+        render_age_gender_chart(df, age_groups)
+
+        # 地図セクション
+        st.divider()
+        st.markdown("### 🗺️ 地図表示")
         
-    # メトリクス表示
-    render_metrics(df, "raw_value", gender_label)
+        max_val = df["display_value"].max()
+        df["fill_color"] = df["display_value"].apply(lambda v: get_heatmap_color(v, max_val))
 
-    # 性年代別チャートの表示
+        df["formatted_age"] = df["平均年齢"].map(lambda x: f"{x:.2f}")
+
+        map_data = df[[
+            "polygon", "fill_color", "display_value", "formatted_value", "formatted_age", "KEY_CODE", "lat_center", "lon_center"
+        ]]
+
+        # 地図レイヤーの設定
+        layer = pdk.Layer(
+            "PolygonLayer",
+            data=map_data,
+            get_polygon="polygon",
+            get_fill_color="fill_color",
+            get_line_color=[255, 255, 255, 0],
+            pickable=True,
+            auto_highlight=True,
+        )
+
+        view_state = pdk.ViewState(
+            latitude=st.session_state.map_center["lat"],
+            longitude=st.session_state.map_center["lon"],
+            zoom=st.session_state.map_zoom,
+            pitch=0,
+        )
+
+        st.pydeck_chart(pdk.Deck(
+            layers=[layer],
+            initial_view_state=view_state,
+            tooltip={
+                "html": "メッシュコード: {KEY_CODE}<br/>"
+                        f"人口: {{formatted_value}}<br/>"
+                        "平均年齢: {formatted_age} 歳",
+                "style": {"backgroundColor": "rgba(255, 255, 255, 0.95)", "color": "#1a202c", "border": "1px solid rgba(0,0,0,0.1)", "backdropFilter": "blur(4px)"}
+            },
+            map_style="light"
+        ))
+        render_map_legend(unit_label)
+
+    # 3. AI Assistant (メインエリア下部に配置)
     st.divider()
-    render_age_gender_chart(df, age_groups)
+    st.subheader("🤖 AI Assistant")
+    st.caption("地図に表示されているエリアについて質問したり、分析を依頼できます。")
 
-    # 地図セクション
-    st.divider()
-    st.markdown(f"### 🗺️ {display_name} の分布 ({display_type})")
-    
-    max_val = df["display_value"].max()
-    df["fill_color"] = df["display_value"].apply(lambda v: get_heatmap_color(v, max_val))
+    # チャット履歴の表示
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"]) # Markdownとしてレンダリングされる
 
-    df["formatted_age"] = df["平均年齢"].map(lambda x: f"{x:.2f}")
+    # チャット入力
+    if prompt := st.chat_input("渋谷駅周辺の30代の人口は？"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.write(prompt)
+        
+        # AI応答の取得と表示
+        with st.chat_message("assistant"):
+            if not api_key:
+                st.error("左側のサイドバーでAPIキーを設定してください。")
+            else:
+                with st.spinner("分析中..."):
+                    try:
+                        # 非同期関数を同期的に実行
+                        response = asyncio.run(run_agent_chat(prompt, st.session_state.adk_session_id, api_key, model_name))
+                        st.write(response) # ストリーミング風に表示したい場合は別途実装が必要だが、まずはwriteで一括表示
+                        st.session_state.messages.append({"role": "assistant", "content": response})
+                    except Exception as e:
+                        st.error(f"AIエラー: {str(e)}")
 
-    map_data = df[[
-        "polygon", "fill_color", "display_value", "formatted_value", "formatted_age", "KEY_CODE", "lat_center", "lon_center"
-    ]]
-
-    # 地図レイヤーの設定
-    layer = pdk.Layer(
-        "PolygonLayer",
-        data=map_data,
-        get_polygon="polygon",
-        get_fill_color="fill_color",
-        get_line_color=[255, 255, 255, 0],
-        pickable=True,
-        auto_highlight=True,
-    )
-
-    view_state = pdk.ViewState(
-        latitude=df["lat_center"].mean() if not df.empty else DEFAULT_LAT,
-        longitude=df["lon_center"].mean() if not df.empty else DEFAULT_LON,
-        zoom=9,
-        pitch=0,
-    )
-
-    st.pydeck_chart(pdk.Deck(
-        layers=[layer],
-        initial_view_state=view_state,
-        tooltip={
-            "html": "メッシュコード: {KEY_CODE}<br/>"
-                    f"<b>{display_name}:</b> {{formatted_value}}<br/>"
-                    "平均年齢: {formatted_age} 歳",
-            "style": {"backgroundColor": "#161b22", "color": "white", "border": "1px solid #30363d"}
-        },
-        map_style=None
-    ))
-    render_map_legend(unit_label)
-
-    
 
 if __name__ == "__main__":
     main()
